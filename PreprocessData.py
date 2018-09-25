@@ -17,7 +17,7 @@ from collections import namedtuple
 
 
 train = pd.read_csv("dataset/labeledTrainData.tsv", delimiter="\t")
-test = pd.read_csv("dataset/testData.tsv", delimiter="\t")
+#test = pd.read_csv("dataset/testData.tsv", delimiter="\t")
 
 
 def clean_text(text, remove_stopwords=True):
@@ -36,57 +36,60 @@ def clean_text(text, remove_stopwords=True):
         labels[index]=label
         index=index+1
 
-
-    # Convert words to lower case and split them
-    reviews = np.array([x.lower() if isinstance(x, str) else x for x in reviews])
-
     # Optionally, remove stop words
     if remove_stopwords:
-        stops = set(stopwords.words("english"))
-        reviews = [w for w in reviews if not w in stops]
+        stopwords = np.loadtxt("dataset/stopwords.txt", dtype='str')
 
-    # text = " ".join(text)
+    # reviews = " ".join(reviews)
+    for i in range(size):
 
-    # Clean the text
-    reviews = re.sub(r"<br />", " ", reviews)
-    reviews = re.sub(r"[^a-z]", " ", reviews)
-    reviews = re.sub(r"   ", " ", reviews)  # Remove any extra spaces
-    reviews = re.sub(r"  ", " ", reviews)
+        if remove_stopwords:
+            for word in stopwords:
+                reviews[i] = reviews[i].replace(" "+word+" ", " ")
+
+        # Clean the text
+        reviews[i] = re.sub(r"<br />", " ", reviews[i])
+        reviews[i] = re.sub(r"[^a-z]", " ", reviews[i])
+        reviews[i] = re.sub(r"   ", " ", reviews[i])  # Remove any extra spaces
+        reviews[i] = re.sub(r"  ", " ", reviews[i])
+
 
     # Return a list of words
     return reviews,labels
 
 
-train_clean=clean_text(train.values,True)
-test_clean=clean_text(test,True)
+train_clean,train_labels=clean_text(train.values,True)
+# test_clean,test_labels=clean_text(test.values,True)
 
 
 # Tokenize the reviews
-all_reviews = train_clean + test_clean
+# all_reviews = " ".join(train_clean)# + " ".join(test_clean)
 tokenizer = Tokenizer()
-tokenizer.fit_on_texts(all_reviews)
+tokenizer.fit_on_texts(train_clean)
 print("Fitting is complete.")
+
+word_index = tokenizer.word_index
+print("word index: "+str(word_index))
 
 train_seq = tokenizer.texts_to_sequences(train_clean)
 print("train_seq is complete.")
 
-test_seq = tokenizer.texts_to_sequences(test_clean)
-print("test_seq is complete")
+# test_seq = tokenizer.texts_to_sequences(test_clean)
+# print("test_seq is complete")
 
-word_index = tokenizer.word_index
-print("word index:"+str(word_index))
+
 
 #length covering 80% of the data
-length=np.percentile(train_seq.counts, 80)
+# length=np.percentile(train_seq, 80)
 
-print('length covering 80% : '+str(length))
+# print('length covering 80% : '+str(length))
 
 max_review_length = 200
 
 train_pad = pad_sequences(train_seq, maxlen = max_review_length)
 print("train_pad is complete.")
 
-test_pad = pad_sequences(test_seq, maxlen = max_review_length)
-print("test_pad is complete.")
+# test_pad = pad_sequences(test_seq, maxlen = max_review_length)
+# print("test_pad is complete.")
 
 
