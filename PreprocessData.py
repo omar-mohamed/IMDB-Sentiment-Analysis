@@ -11,6 +11,7 @@ from sklearn.model_selection import train_test_split
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
 from collections import namedtuple
+from six.moves import cPickle as pickle
 
 # nltk.download()
 
@@ -43,15 +44,18 @@ def clean_text(text, remove_stopwords=True):
     # reviews = " ".join(reviews)
     for i in range(size):
 
-        if remove_stopwords:
-            for word in stopwords:
-                reviews[i] = reviews[i].replace(" "+word+" ", " ")
-
         # Clean the text
         reviews[i] = re.sub(r"<br />", " ", reviews[i])
         reviews[i] = re.sub(r"[^a-z]", " ", reviews[i])
         reviews[i] = re.sub(r"   ", " ", reviews[i])  # Remove any extra spaces
         reviews[i] = re.sub(r"  ", " ", reviews[i])
+
+
+        if remove_stopwords:
+            word_list = reviews[i].split();
+            reviews[i]=' '.join([i for i in word_list if i not in stopwords])
+            # for word in stopwords:
+            #     reviews[i] = reviews[i].replace(" "+word+" ", " ")
 
 
     # Return a list of words
@@ -93,3 +97,26 @@ print("train_pad is complete.")
 # print("test_pad is complete.")
 
 
+x_train, x_test, y_train, y_test = train_test_split(train_pad, train_labels, test_size = 0.20, random_state = 2)
+
+
+# save data to a pickle file to load when training
+
+print("Saving data into pickle file")
+
+pickle_file = 'dataset.pickle'
+
+try:
+    f = open(pickle_file, 'wb')
+    save = {
+        'train_dataset': x_train,
+        'train_labels': y_train,
+        'test_dataset': x_test,
+        'test_labels': y_test,
+    }
+    pickle.dump(save, f, pickle.HIGHEST_PROTOCOL)
+    f.close()
+    print("Done")
+except Exception as e:
+    print('Unable to save data to', pickle_file, ':', e)
+    raise
