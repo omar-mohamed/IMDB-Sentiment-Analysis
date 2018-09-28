@@ -98,6 +98,7 @@ print("train_pad is complete.")
 
 
 x_train, x_test, y_train, y_test = train_test_split(train_pad, train_labels, test_size = 0.20, random_state = 2)
+x_test, x_valid, y_test, y_valid = train_test_split(x_test, y_test, test_size = 0.20, random_state = 2)
 
 
 # save data to a pickle file to load when training
@@ -113,6 +114,9 @@ try:
         'train_labels': y_train,
         'test_dataset': x_test,
         'test_labels': y_test,
+        'valid_dataset': x_valid,
+        'valid_labels': y_valid,
+        'num_of_words': len(word_index)
     }
     pickle.dump(save, f, pickle.HIGHEST_PROTOCOL)
     f.close()
