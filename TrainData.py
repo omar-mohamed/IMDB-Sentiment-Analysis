@@ -23,12 +23,13 @@ n_words = all_data['num_of_words']
 
 del all_data
 
+
 def get_batches(x, y, batch_size):
     '''Create the batches for the training and validation data'''
-    n_batches = len(x)//batch_size
-    x, y = x[:n_batches*batch_size], y[:n_batches*batch_size]
+    n_batches = len(x) // batch_size
+    x, y = x[:n_batches * batch_size], y[:n_batches * batch_size]
     for ii in range(0, len(x), batch_size):
-        yield x[ii:ii+batch_size], y[ii:ii+batch_size]
+        yield x[ii:ii + batch_size], y[ii:ii + batch_size]
 
 
 def build_rnn(n_words, embed_size, batch_size, lstm_size, num_layers, dropout, learning_rate, multiple_fc, fc_units):
@@ -47,7 +48,7 @@ def build_rnn(n_words, embed_size, batch_size, lstm_size, num_layers, dropout, l
 
     # Create the embeddings
     with tf.name_scope("embeddings"):
-        embedding = tf.Variable(tf.random_uniform((n_words,
+        embedding = tf.Variable(tf.random_uniform((n_words+1,
                                                    embed_size), -1, 1))
         embed = tf.nn.embedding_lookup(embedding, inputs)
 
@@ -83,7 +84,7 @@ def build_rnn(n_words, embed_size, batch_size, lstm_size, num_layers, dropout, l
 
         dense = tf.contrib.layers.dropout(dense, keep_prob)
 
-            # Depending on the iteration, use a second fully connected layer
+        # Depending on the iteration, use a second fully connected layer
         if multiple_fc == True:
             dense = tf.contrib.layers.fully_connected(dense,
                                                       num_outputs=fc_units,
@@ -92,7 +93,6 @@ def build_rnn(n_words, embed_size, batch_size, lstm_size, num_layers, dropout, l
                                                       biases_initializer=biases)
 
             dense = tf.contrib.layers.dropout(dense, keep_prob)
-
 
     # Make the predictions
     with tf.name_scope('predictions'):
@@ -133,9 +133,6 @@ def build_rnn(n_words, embed_size, batch_size, lstm_size, num_layers, dropout, l
 
     return graph
 
-
-batch_size=100
-dropout=0.5
 
 def train(model, epochs, log_string):
     '''Train the RNN'''
@@ -243,13 +240,12 @@ def train(model, epochs, log_string):
                 saver.save(sess, checkpoint)
 
 
-
 # The default parameters of the model
 embed_size = 300
 batch_size = 100
 lstm_size = 128
 num_layers = 1
-dropout = 0.7
+dropout = 0.75
 learning_rate = 0.001
 epochs = 10
 multiple_fc = False
@@ -269,4 +265,3 @@ model = build_rnn(n_words=n_words,
                   fc_units=fc_units)
 
 train(model, epochs, log_string)
-
