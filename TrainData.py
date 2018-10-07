@@ -1,13 +1,12 @@
 from __future__ import print_function
 import numpy as np
 import tensorflow as tf
-import tensorflow.contrib
 from six.moves import cPickle as pickle
-from matplotlib import pyplot as plt
-
-##################load data#####################
 from tensorboard.backend.event_processing.event_accumulator import namedtuple
 from tqdm import tqdm
+
+
+##################load data#####################
 
 print("Loading data")
 
@@ -32,7 +31,7 @@ def get_batches(x, y, batch_size):
         yield x[ii:ii + batch_size], y[ii:ii + batch_size]
 
 
-def build_rnn(n_words, embed_size, batch_size, lstm_size, num_layers, dropout, learning_rate, multiple_fc, fc_units):
+def build_rnn(n_words, embed_size, batch_size, lstm_sizes, dropout, learning_rate, output_hidden_units):
     '''Build the Recurrent Neural Network'''
 
     tf.reset_default_graph()
@@ -48,17 +47,16 @@ def build_rnn(n_words, embed_size, batch_size, lstm_size, num_layers, dropout, l
 
     # Create the embeddings
     with tf.name_scope("embeddings"):
-        embedding = tf.Variable(tf.random_uniform((n_words+1,
+        embedding = tf.Variable(tf.random_uniform((n_words + 1,
                                                    embed_size), -1, 1))
         embed = tf.nn.embedding_lookup(embedding, inputs)
 
     # Build the RNN layers
     with tf.name_scope("RNN_layers"):
-        lstm = tf.contrib.rnn.BasicLSTMCell(lstm_size)
-        drop = tf.contrib.rnn.DropoutWrapper(lstm,
-                                             output_keep_prob=keep_prob)
-        cell = tf.contrib.rnn.MultiRNNCell([drop] * num_layers)
+        cells = [tf.nn.rnn_cell.DropoutWrapper(tf.nn.rnn_cell.LSTMCell(num_units=n), output_keep_prob=keep_prob) for n
+                 in lstm_sizes]
 
+        cell = tf.nn.rnn_cell.MultiRNNCell(cells)
     # Set the initial state
     with tf.name_scope("RNN_init_state"):
         initial_state = cell.zero_state(batch_size, tf.float32)
@@ -68,7 +66,8 @@ def build_rnn(n_words, embed_size, batch_size, lstm_size, num_layers, dropout, l
         outputs, final_state = tf.nn.dynamic_rnn(
             cell,
             embed,
-            initial_state=initial_state)
+            initial_state=initial_state,
+        )
 
         # Create the fully connected layers
     with tf.name_scope("fully_connected"):
@@ -77,18 +76,18 @@ def build_rnn(n_words, embed_size, batch_size, lstm_size, num_layers, dropout, l
         biases = tf.zeros_initializer()
 
         dense = tf.contrib.layers.fully_connected(outputs[:, -1],
-                                                  num_outputs=fc_units,
-                                                  activation_fn=tf.sigmoid,
+                                                  num_outputs=output_hidden_units[0],
+                                                  activation_fn=tf.nn.relu,
                                                   weights_initializer=weights,
                                                   biases_initializer=biases)
 
         dense = tf.contrib.layers.dropout(dense, keep_prob)
 
         # Depending on the iteration, use a second fully connected layer
-        if multiple_fc == True:
+        for i in range(1, len(output_hidden_units)):
             dense = tf.contrib.layers.fully_connected(dense,
-                                                      num_outputs=fc_units,
-                                                      activation_fn=tf.sigmoid,
+                                                      num_outputs=output_hidden_units[i],
+                                                      activation_fn=tf.nn.relu,
                                                       weights_initializer=weights,
                                                       biases_initializer=biases)
 
@@ -106,7 +105,7 @@ def build_rnn(n_words, embed_size, batch_size, lstm_size, num_layers, dropout, l
 
     # Calculate the cost
     with tf.name_scope('cost'):
-        cost = tf.losses.mean_squared_error(labels, predictions)
+        cost = tf.losses.sigmoid_cross_entropy(labels, predictions)
         tf.summary.scalar('cost', cost)
 
     # Train the model
@@ -227,7 +226,7 @@ def train(model, epochs, log_string):
             if avg_valid_loss > min(valid_loss_summary):
                 print("No Improvement.")
                 stop_early += 1
-                if stop_early == 3:
+                if stop_early == 1:
                     break
 
                     # Reset stop_early if the validation loss finds a new low
@@ -243,25 +242,20 @@ def train(model, epochs, log_string):
 # The default parameters of the model
 embed_size = 300
 batch_size = 100
-lstm_size = 128
-num_layers = 1
+lstm_sizes = [128]
 dropout = 0.75
 learning_rate = 0.001
 epochs = 10
-multiple_fc = False
-fc_units = 256
+output_hidden_units = [256]
 
-log_string = 'ru={},fcl={},fcu={}'.format(lstm_size,
-                                          multiple_fc,
-                                          fc_units)
+log_string = 'lstm_sizes={},output_hidden_units={}'.format(lstm_sizes,
+                                                           output_hidden_units)
 model = build_rnn(n_words=n_words,
                   embed_size=embed_size,
                   batch_size=batch_size,
-                  lstm_size=lstm_size,
-                  num_layers=num_layers,
+                  lstm_sizes=lstm_sizes,
                   dropout=dropout,
                   learning_rate=learning_rate,
-                  multiple_fc=multiple_fc,
-                  fc_units=fc_units)
+                  output_hidden_units=output_hidden_units)
 
 train(model, epochs, log_string)
