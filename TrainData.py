@@ -226,7 +226,7 @@ def train(model, epochs, log_string):
             if avg_valid_loss > min(valid_loss_summary):
                 print("No Improvement.")
                 stop_early += 1
-                if stop_early == 1:
+                if stop_early == 2:
                     break
 
                     # Reset stop_early if the validation loss finds a new low
@@ -237,15 +237,42 @@ def train(model, epochs, log_string):
                 checkpoint = "./logs/sentiment_{}.ckpt".format(
                     log_string)
                 saver.save(sess, checkpoint)
+        test_acc = []
+        test_loss = []
+        test_state = sess.run(model.initial_state)
+        with tqdm(total=len(test_data)) as pbar:
+            for x, y in get_batches(test_data, test_labels, batch_size):
+                feed = {model.inputs: x,
+                        model.labels: y[:, None],
+                        model.keep_prob: 1,
+                        model.initial_state: test_state}
+                summary, batch_loss, batch_acc, test_state = sess.run([model.merged,
+                                                                      model.cost,
+                                                                      model.accuracy,
+                                                                      model.final_state],
+                                                                      feed_dict=feed)
+
+                # Record the validation loss and accuracy of each epoch
+                test_loss.append(batch_loss)
+                test_acc.append(batch_acc)
+                pbar.update(batch_size)
+
+            # Average the validation loss and accuracy of each epoch
+        avg_test_loss = np.mean(test_loss)
+        avg_test_acc = np.mean(test_acc)
+        # Print the progress of each epoch
+        print("Test Loss: {:.3f}".format(avg_test_loss),
+              "Test Acc: {:.3f}".format(avg_test_acc))
+
 
 
 # The default parameters of the model
 embed_size = 300
 batch_size = 100
 lstm_sizes = [128]
-dropout = 0.75
-learning_rate = 0.001
-epochs = 10
+dropout = 0.8
+learning_rate = 0.0001
+epochs = 50
 output_hidden_units = [256]
 
 log_string = 'lstm_sizes={},output_hidden_units={}'.format(lstm_sizes,
