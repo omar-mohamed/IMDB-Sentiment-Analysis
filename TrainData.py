@@ -3,6 +3,7 @@ import numpy as np
 import tensorflow as tf
 from six.moves import cPickle as pickle
 from tensorboard.backend.event_processing.event_accumulator import namedtuple
+from tensorflow.contrib.layers.python.layers import initializers
 from tqdm import tqdm
 
 
@@ -31,7 +32,7 @@ def get_batches(x, y, batch_size):
         yield x[ii:ii + batch_size], y[ii:ii + batch_size]
 
 
-def build_rnn(n_words, embed_size, batch_size, lstm_sizes, dropout, learning_rate, output_hidden_units):
+def build_rnn(n_words, embed_size, lstm_sizes, learning_rate, output_hidden_units):
     '''Build the Recurrent Neural Network'''
 
     tf.reset_default_graph()
@@ -39,11 +40,11 @@ def build_rnn(n_words, embed_size, batch_size, lstm_sizes, dropout, learning_rat
     # Declare placeholders we'll feed into the graph
     with tf.name_scope('inputs'):
         inputs = tf.placeholder(tf.int32, [None, None], name='inputs')
-
+        keep_prob = tf.placeholder(tf.float32, name='keep_prob')
+        batch_size = tf.placeholder(tf.int32,shape=(), name='batch_size')
     with tf.name_scope('labels'):
         labels = tf.placeholder(tf.int32, [None, None], name='labels')
 
-    keep_prob = tf.placeholder(tf.float32, name='keep_prob')
 
     # Create the embeddings
     with tf.name_scope("embeddings"):
@@ -60,6 +61,7 @@ def build_rnn(n_words, embed_size, batch_size, lstm_sizes, dropout, learning_rat
     # Set the initial state
     with tf.name_scope("RNN_init_state"):
         initial_state = cell.zero_state(batch_size, tf.float32)
+        # initial_state = tf.identity(initial_state, name="initial_state")
 
     # Run the data through the RNN layers
     with tf.name_scope("RNN_forward"):
@@ -72,13 +74,13 @@ def build_rnn(n_words, embed_size, batch_size, lstm_sizes, dropout, learning_rat
         # Create the fully connected layers
     with tf.name_scope("fully_connected"):
         # Initialize the weights and biases
-        weights = tf.truncated_normal_initializer(stddev=0.1)
+        weights_initializer = initializers.xavier_initializer()
         biases = tf.zeros_initializer()
 
         dense = tf.contrib.layers.fully_connected(outputs[:, -1],
                                                   num_outputs=output_hidden_units[0],
                                                   activation_fn=tf.nn.relu,
-                                                  weights_initializer=weights,
+                                                  weights_initializer=weights_initializer,
                                                   biases_initializer=biases)
 
         dense = tf.contrib.layers.dropout(dense, keep_prob)
@@ -88,7 +90,7 @@ def build_rnn(n_words, embed_size, batch_size, lstm_sizes, dropout, learning_rat
             dense = tf.contrib.layers.fully_connected(dense,
                                                       num_outputs=output_hidden_units[i],
                                                       activation_fn=tf.nn.relu,
-                                                      weights_initializer=weights,
+                                                      weights_initializer=weights_initializer,
                                                       biases_initializer=biases)
 
             dense = tf.contrib.layers.dropout(dense, keep_prob)
@@ -98,8 +100,10 @@ def build_rnn(n_words, embed_size, batch_size, lstm_sizes, dropout, learning_rat
         predictions = tf.contrib.layers.fully_connected(dense,
                                                         num_outputs=1,
                                                         activation_fn=tf.sigmoid,
-                                                        weights_initializer=weights,
+                                                        weights_initializer=weights_initializer,
                                                         biases_initializer=biases)
+
+        predictions=tf.identity(predictions, name="predictions")
 
         tf.summary.histogram('predictions', predictions)
 
@@ -123,7 +127,7 @@ def build_rnn(n_words, embed_size, batch_size, lstm_sizes, dropout, learning_rat
     merged = tf.summary.merge_all()
 
     # Export the nodes
-    export_nodes = ['inputs', 'labels', 'keep_prob', 'initial_state',
+    export_nodes = ['inputs', 'labels', 'keep_prob','batch_size', 'initial_state',
                     'final_state', 'accuracy', 'predictions', 'cost',
                     'optimizer', 'merged']
     Graph = namedtuple('Graph', export_nodes)
@@ -150,11 +154,12 @@ def train(model, epochs, log_string):
         print()
         print("Training Model: {}".format(log_string))
 
-        train_writer = tf.summary.FileWriter('./logs/3/train/{}'.format(log_string), sess.graph)
-        valid_writer = tf.summary.FileWriter('./logs/3/valid/{}'.format(log_string))
+        train_writer = tf.summary.FileWriter('./saved_model/logs/train/{}'.format(log_string), sess.graph)
+        valid_writer = tf.summary.FileWriter('./saved_model/logs/valid/{}'.format(log_string))
 
         for e in range(epochs):
-            state = sess.run(model.initial_state)
+
+            state = sess.run(model.initial_state,feed_dict={model.batch_size: batch_size})
 
             # Record progress with each epoch
             train_loss = []
@@ -165,6 +170,7 @@ def train(model, epochs, log_string):
             with tqdm(total=len(train_data)) as pbar:
                 for _, (x, y) in enumerate(get_batches(train_data, train_labels, batch_size), 1):
                     feed = {model.inputs: x,
+                            model.batch_size: batch_size,
                             model.labels: y[:, None],
                             model.keep_prob: dropout,
                             model.initial_state: state}
@@ -189,10 +195,11 @@ def train(model, epochs, log_string):
             avg_train_loss = np.mean(train_loss)
             avg_train_acc = np.mean(train_acc)
 
-            val_state = sess.run(model.initial_state)
+            val_state = sess.run(model.initial_state,feed_dict={model.batch_size: batch_size})
             with tqdm(total=len(valid_data)) as pbar:
                 for x, y in get_batches(valid_data, valid_labels, batch_size):
                     feed = {model.inputs: x,
+                            model.batch_size: batch_size,
                             model.labels: y[:, None],
                             model.keep_prob: 1,
                             model.initial_state: val_state}
@@ -234,15 +241,16 @@ def train(model, epochs, log_string):
             else:
                 print("New Record!")
                 stop_early = 0
-                checkpoint = "./logs/sentiment_{}.ckpt".format(
+                checkpoint = "./saved_model/sentiment_{}.ckpt".format(
                     log_string)
                 saver.save(sess, checkpoint)
         test_acc = []
         test_loss = []
-        test_state = sess.run(model.initial_state)
+        test_state = sess.run(model.initial_state,feed_dict={model.batch_size: batch_size})
         with tqdm(total=len(test_data)) as pbar:
             for x, y in get_batches(test_data, test_labels, batch_size):
                 feed = {model.inputs: x,
+                        model.batch_size: batch_size,
                         model.labels: y[:, None],
                         model.keep_prob: 1,
                         model.initial_state: test_state}
@@ -269,19 +277,17 @@ def train(model, epochs, log_string):
 # The default parameters of the model
 embed_size = 300
 batch_size = 100
-lstm_sizes = [128]
-dropout = 0.8
+lstm_sizes = [64]
+dropout = 0.75
 learning_rate = 0.0001
 epochs = 50
-output_hidden_units = [256]
+output_hidden_units = [128]
 
 log_string = 'lstm_sizes={},output_hidden_units={}'.format(lstm_sizes,
                                                            output_hidden_units)
 model = build_rnn(n_words=n_words,
                   embed_size=embed_size,
-                  batch_size=batch_size,
                   lstm_sizes=lstm_sizes,
-                  dropout=dropout,
                   learning_rate=learning_rate,
                   output_hidden_units=output_hidden_units)
 

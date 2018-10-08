@@ -109,7 +109,9 @@ try:
         'test_labels': y_test,
         'valid_dataset': x_valid,
         'valid_labels': y_valid,
-        'num_of_words': len(word_index)
+        'num_of_words': len(word_index),
+        'tokenizer': tokenizer,
+        'max_review_length':max_review_length
     }
     pickle.dump(save, f, pickle.HIGHEST_PROTOCOL)
     f.close()
