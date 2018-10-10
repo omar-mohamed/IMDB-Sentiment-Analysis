@@ -6,7 +6,6 @@ from tensorboard.backend.event_processing.event_accumulator import namedtuple
 from tensorflow.contrib.layers.python.layers import initializers
 from tqdm import tqdm
 
-
 ##################load data#####################
 
 print("Loading data")
@@ -32,7 +31,8 @@ def get_batches(x, y, batch_size):
         yield x[ii:ii + batch_size], y[ii:ii + batch_size]
 
 
-def build_rnn(n_words, embed_size, lstm_sizes, learning_rate, output_hidden_units):
+def build_rnn(n_words, embed_size, lstm_sizes, starting_learning_rate, output_hidden_units,
+              learning_rate_decay_rate_every_epoch=0.50):
     '''Build the Recurrent Neural Network'''
 
     tf.reset_default_graph()
@@ -41,10 +41,9 @@ def build_rnn(n_words, embed_size, lstm_sizes, learning_rate, output_hidden_unit
     with tf.name_scope('inputs'):
         inputs = tf.placeholder(tf.int32, [None, None], name='inputs')
         keep_prob = tf.placeholder(tf.float32, name='keep_prob')
-        batch_size = tf.placeholder(tf.int32,shape=(), name='batch_size')
+        batch_size = tf.placeholder(tf.int32, shape=(), name='batch_size')
     with tf.name_scope('labels'):
         labels = tf.placeholder(tf.int32, [None, None], name='labels')
-
 
     # Create the embeddings
     with tf.name_scope("embeddings"):
@@ -103,7 +102,7 @@ def build_rnn(n_words, embed_size, lstm_sizes, learning_rate, output_hidden_unit
                                                         weights_initializer=weights_initializer,
                                                         biases_initializer=biases)
 
-        predictions=tf.identity(predictions, name="predictions")
+        predictions = tf.identity(predictions, name="predictions")
 
         tf.summary.histogram('predictions', predictions)
 
@@ -114,7 +113,19 @@ def build_rnn(n_words, embed_size, lstm_sizes, learning_rate, output_hidden_unit
 
     # Train the model
     with tf.name_scope('train'):
-        optimizer = tf.train.AdamOptimizer(learning_rate).minimize(cost)
+        global_step = tf.Variable(0, trainable=False, name='global_step')
+        learning_rate = tf.train.exponential_decay(starting_learning_rate, global_step, len(train_data) // batch_size,
+                                                   learning_rate_decay_rate_every_epoch,
+                                                   staircase=True,
+                                                   name='learning_rate')  # use learning rate decay every epoch
+        # Optimizer.
+        optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+        tvars = tf.trainable_variables()
+        grads, _ = tf.clip_by_global_norm(tf.gradients(cost, tvars),
+                                          1.0)  # gradient clipping by 1
+        optimize = optimizer.apply_gradients(
+            zip(grads, tvars),
+            global_step=global_step, name='optimize')
 
     # Determine the accuracy
     with tf.name_scope("accuracy"):
@@ -127,9 +138,9 @@ def build_rnn(n_words, embed_size, lstm_sizes, learning_rate, output_hidden_unit
     merged = tf.summary.merge_all()
 
     # Export the nodes
-    export_nodes = ['inputs', 'labels', 'keep_prob','batch_size', 'initial_state',
+    export_nodes = ['inputs', 'labels', 'keep_prob', 'batch_size', 'learning_rate', 'initial_state',
                     'final_state', 'accuracy', 'predictions', 'cost',
-                    'optimizer', 'merged']
+                    'optimizer', 'optimize', 'merged']
     Graph = namedtuple('Graph', export_nodes)
     local_dict = locals()
     graph = Graph(*[local_dict[each] for each in export_nodes])
@@ -159,32 +170,32 @@ def train(model, epochs, log_string):
 
         for e in range(epochs):
 
-            state = sess.run(model.initial_state,feed_dict={model.batch_size: batch_size})
+            # state = sess.run(model.initial_state,feed_dict={model.batch_size: batch_size})
 
             # Record progress with each epoch
             train_loss = []
             train_acc = []
             val_acc = []
             val_loss = []
-
+            learning_rates = []
             with tqdm(total=len(train_data)) as pbar:
                 for _, (x, y) in enumerate(get_batches(train_data, train_labels, batch_size), 1):
                     feed = {model.inputs: x,
                             model.batch_size: batch_size,
                             model.labels: y[:, None],
-                            model.keep_prob: dropout,
-                            model.initial_state: state}
-                    summary, loss, acc, state, _ = sess.run([model.merged,
-                                                             model.cost,
-                                                             model.accuracy,
-                                                             model.final_state,
-                                                             model.optimizer],
-                                                            feed_dict=feed)
+                            model.keep_prob: dropout}
+                    summary, loss, acc, state, lr, _ = sess.run([model.merged,
+                                                                 model.cost,
+                                                                 model.accuracy,
+                                                                 model.final_state,
+                                                                 model.learning_rate,
+                                                                 model.optimize],
+                                                                feed_dict=feed)
 
                     # Record the loss and accuracy of each training batch
                     train_loss.append(loss)
                     train_acc.append(acc)
-
+                    learning_rates.append(lr)
                     # Record the progress of training
                     train_writer.add_summary(summary, iteration)
 
@@ -195,14 +206,13 @@ def train(model, epochs, log_string):
             avg_train_loss = np.mean(train_loss)
             avg_train_acc = np.mean(train_acc)
 
-            val_state = sess.run(model.initial_state,feed_dict={model.batch_size: batch_size})
+            # val_state = sess.run(model.initial_state,feed_dict={model.batch_size: batch_size})
             with tqdm(total=len(valid_data)) as pbar:
                 for x, y in get_batches(valid_data, valid_labels, batch_size):
                     feed = {model.inputs: x,
                             model.batch_size: batch_size,
                             model.labels: y[:, None],
-                            model.keep_prob: 1,
-                            model.initial_state: val_state}
+                            model.keep_prob: 1}
                     summary, batch_loss, batch_acc, val_state = sess.run([model.merged,
                                                                           model.cost,
                                                                           model.accuracy,
@@ -224,6 +234,8 @@ def train(model, epochs, log_string):
 
             # Print the progress of each epoch
             print("Epoch: {}/{}".format(e, epochs),
+                  "Starting Learning Rate: {:.10f}".format(max(learning_rates)),
+                  "Ending Learning Rate: {:.10f}".format(min(learning_rates)),
                   "Train Loss: {:.3f}".format(avg_train_loss),
                   "Train Acc: {:.3f}".format(avg_train_acc),
                   "Valid Loss: {:.3f}".format(avg_valid_loss),
@@ -246,18 +258,17 @@ def train(model, epochs, log_string):
                 saver.save(sess, checkpoint)
         test_acc = []
         test_loss = []
-        test_state = sess.run(model.initial_state,feed_dict={model.batch_size: batch_size})
+        # test_state = sess.run(model.initial_state,feed_dict={model.batch_size: batch_size})
         with tqdm(total=len(test_data)) as pbar:
             for x, y in get_batches(test_data, test_labels, batch_size):
                 feed = {model.inputs: x,
                         model.batch_size: batch_size,
                         model.labels: y[:, None],
-                        model.keep_prob: 1,
-                        model.initial_state: test_state}
+                        model.keep_prob: 1}
                 summary, batch_loss, batch_acc, test_state = sess.run([model.merged,
-                                                                      model.cost,
-                                                                      model.accuracy,
-                                                                      model.final_state],
+                                                                       model.cost,
+                                                                       model.accuracy,
+                                                                       model.final_state],
                                                                       feed_dict=feed)
 
                 # Record the validation loss and accuracy of each epoch
@@ -265,7 +276,7 @@ def train(model, epochs, log_string):
                 test_acc.append(batch_acc)
                 pbar.update(batch_size)
 
-            # Average the validation loss and accuracy of each epoch
+                # Average the validation loss and accuracy of each epoch
         avg_test_loss = np.mean(test_loss)
         avg_test_acc = np.mean(test_acc)
         # Print the progress of each epoch
@@ -273,13 +284,12 @@ def train(model, epochs, log_string):
               "Test Acc: {:.3f}".format(avg_test_acc))
 
 
-
 # The default parameters of the model
 embed_size = 300
 batch_size = 100
 lstm_sizes = [64]
 dropout = 0.75
-learning_rate = 0.0001
+learning_rate = 0.001
 epochs = 50
 output_hidden_units = [128]
 
@@ -288,7 +298,7 @@ log_string = 'lstm_sizes={},output_hidden_units={}'.format(lstm_sizes,
 model = build_rnn(n_words=n_words,
                   embed_size=embed_size,
                   lstm_sizes=lstm_sizes,
-                  learning_rate=learning_rate,
+                  starting_learning_rate=learning_rate,
                   output_hidden_units=output_hidden_units)
 
 train(model, epochs, log_string)
