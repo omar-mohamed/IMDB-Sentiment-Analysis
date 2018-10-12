@@ -1,10 +1,13 @@
 from __future__ import print_function
 import numpy as np
+import pathlib
 import tensorflow as tf
 from six.moves import cPickle as pickle
 from tensorboard.backend.event_processing.event_accumulator import namedtuple
 from tensorflow.contrib.layers.python.layers import initializers
 from tqdm import tqdm
+from distutils.dir_util import copy_tree
+import time
 
 ##################load data#####################
 
@@ -22,6 +25,27 @@ n_words = all_data['num_of_words']
 
 del all_data
 
+def save_best_overall_model_data(data):
+    pathlib.Path('./best_model').mkdir(parents=True, exist_ok=True)
+    pickle_file = './best_model/best_model_info.pickle'
+    try:
+        f = open(pickle_file, 'wb')
+        pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
+        f.close()
+        print("Done")
+    except Exception as e:
+        print('Unable to save data to', pickle_file, ':', e)
+        raise
+
+
+try:
+    best_accuracy_on_test_file = pickle.load(open('./best_model/best_model_info.pickle', 'rb'))
+    best_accuracy_on_test = best_accuracy_on_test_file['best_test_accuracy']
+    del best_accuracy_on_test_file
+except:
+    save_best_overall_model_data({'best_test_accuracy':0})
+    best_accuracy_on_test=0
+
 
 def get_batches(x, y, batch_size):
     '''Create the batches for the training and validation data'''
@@ -32,7 +56,7 @@ def get_batches(x, y, batch_size):
 
 
 def build_rnn(n_words, embed_size, lstm_sizes, starting_learning_rate, output_hidden_units,
-              learning_rate_decay_rate_every_epoch=0.50):
+              learning_rate_decay_rate_every_epoch=0.50, gradient_clipping_by=1.0):
     '''Build the Recurrent Neural Network'''
 
     tf.reset_default_graph()
@@ -40,35 +64,37 @@ def build_rnn(n_words, embed_size, lstm_sizes, starting_learning_rate, output_hi
     # Declare placeholders we'll feed into the graph
     with tf.name_scope('inputs'):
         inputs = tf.placeholder(tf.int32, [None, None], name='inputs')
-        keep_prob = tf.placeholder(tf.float32, name='keep_prob')
+        lstm_output_keep_prob = tf.placeholder(tf.float32, name='lstm_output_keep_prob')
+        fully_connected_keep_prob = tf.placeholder(tf.float32, name='fully_connected_keep_prob')
         batch_size = tf.placeholder(tf.int32, shape=(), name='batch_size')
     with tf.name_scope('labels'):
         labels = tf.placeholder(tf.int32, [None, None], name='labels')
 
     # Create the embeddings
     with tf.name_scope("embeddings"):
-        embedding = tf.Variable(tf.random_uniform((n_words + 1,
-                                                   embed_size), -1, 1))
+        embedding = tf.get_variable("embeddings", shape=(n_words + 1, embed_size),
+                        initializer=initializers.xavier_initializer())
+
         embed = tf.nn.embedding_lookup(embedding, inputs)
 
     # Build the RNN layers
     with tf.name_scope("RNN_layers"):
-        cells = [tf.nn.rnn_cell.DropoutWrapper(tf.nn.rnn_cell.LSTMCell(num_units=n), output_keep_prob=keep_prob) for n
-                 in lstm_sizes]
+        cells = [
+            tf.nn.rnn_cell.DropoutWrapper(tf.nn.rnn_cell.LSTMCell(num_units=n,initializer=initializers.xavier_initializer()), output_keep_prob=lstm_output_keep_prob)
+            for n
+            in lstm_sizes]
 
         cell = tf.nn.rnn_cell.MultiRNNCell(cells)
     # Set the initial state
     with tf.name_scope("RNN_init_state"):
         initial_state = cell.zero_state(batch_size, tf.float32)
-        # initial_state = tf.identity(initial_state, name="initial_state")
 
     # Run the data through the RNN layers
     with tf.name_scope("RNN_forward"):
         outputs, final_state = tf.nn.dynamic_rnn(
             cell,
             embed,
-            initial_state=initial_state,
-        )
+            initial_state=initial_state)
 
         # Create the fully connected layers
     with tf.name_scope("fully_connected"):
@@ -82,7 +108,7 @@ def build_rnn(n_words, embed_size, lstm_sizes, starting_learning_rate, output_hi
                                                   weights_initializer=weights_initializer,
                                                   biases_initializer=biases)
 
-        dense = tf.contrib.layers.dropout(dense, keep_prob)
+        dense = tf.contrib.layers.dropout(dense, fully_connected_keep_prob)
 
         # Depending on the iteration, use a second fully connected layer
         for i in range(1, len(output_hidden_units)):
@@ -92,7 +118,7 @@ def build_rnn(n_words, embed_size, lstm_sizes, starting_learning_rate, output_hi
                                                       weights_initializer=weights_initializer,
                                                       biases_initializer=biases)
 
-            dense = tf.contrib.layers.dropout(dense, keep_prob)
+            dense = tf.contrib.layers.dropout(dense, fully_connected_keep_prob)
 
     # Make the predictions
     with tf.name_scope('predictions'):
@@ -108,7 +134,7 @@ def build_rnn(n_words, embed_size, lstm_sizes, starting_learning_rate, output_hi
 
     # Calculate the cost
     with tf.name_scope('cost'):
-        cost = tf.losses.sigmoid_cross_entropy(labels, predictions)
+        cost = tf.losses.mean_squared_error(labels, predictions)
         tf.summary.scalar('cost', cost)
 
     # Train the model
@@ -122,7 +148,7 @@ def build_rnn(n_words, embed_size, lstm_sizes, starting_learning_rate, output_hi
         optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
         tvars = tf.trainable_variables()
         grads, _ = tf.clip_by_global_norm(tf.gradients(cost, tvars),
-                                          1.0)  # gradient clipping by 1
+                                          gradient_clipping_by)  # gradient clipping by 1
         optimize = optimizer.apply_gradients(
             zip(grads, tvars),
             global_step=global_step, name='optimize')
@@ -138,7 +164,8 @@ def build_rnn(n_words, embed_size, lstm_sizes, starting_learning_rate, output_hi
     merged = tf.summary.merge_all()
 
     # Export the nodes
-    export_nodes = ['inputs', 'labels', 'keep_prob', 'batch_size', 'learning_rate', 'initial_state',
+    export_nodes = ['inputs', 'labels', 'fully_connected_keep_prob', 'lstm_output_keep_prob', 'batch_size',
+                    'learning_rate', 'initial_state',
                     'final_state', 'accuracy', 'predictions', 'cost',
                     'optimizer', 'optimize', 'merged']
     Graph = namedtuple('Graph', export_nodes)
@@ -162,11 +189,10 @@ def train(model, epochs, log_string):
         # Keep track of which batch iteration is being trained
         iteration = 0
 
-        print()
         print("Training Model: {}".format(log_string))
 
-        train_writer = tf.summary.FileWriter('./saved_model/logs/train/{}'.format(log_string), sess.graph)
-        valid_writer = tf.summary.FileWriter('./saved_model/logs/valid/{}'.format(log_string))
+        train_writer = tf.summary.FileWriter('./saved_model/model_{}/logs/train'.format(log_string), sess.graph)
+        valid_writer = tf.summary.FileWriter('./saved_model/model_{}/logs/valid'.format(log_string))
 
         for e in range(epochs):
 
@@ -183,7 +209,8 @@ def train(model, epochs, log_string):
                     feed = {model.inputs: x,
                             model.batch_size: batch_size,
                             model.labels: y[:, None],
-                            model.keep_prob: dropout}
+                            model.lstm_output_keep_prob: lstm_output_keep_prob,
+                            model.fully_connected_keep_prob: fully_connected_keep_prob}
                     summary, loss, acc, state, lr, _ = sess.run([model.merged,
                                                                  model.cost,
                                                                  model.accuracy,
@@ -212,7 +239,8 @@ def train(model, epochs, log_string):
                     feed = {model.inputs: x,
                             model.batch_size: batch_size,
                             model.labels: y[:, None],
-                            model.keep_prob: 1}
+                            model.lstm_output_keep_prob: 1.0,
+                            model.fully_connected_keep_prob: 1.0}
                     summary, batch_loss, batch_acc, val_state = sess.run([model.merged,
                                                                           model.cost,
                                                                           model.accuracy,
@@ -245,7 +273,7 @@ def train(model, epochs, log_string):
             if avg_valid_loss > min(valid_loss_summary):
                 print("No Improvement.")
                 stop_early += 1
-                if stop_early == 2:
+                if stop_early == early_stopping_by:
                     break
 
                     # Reset stop_early if the validation loss finds a new low
@@ -253,7 +281,7 @@ def train(model, epochs, log_string):
             else:
                 print("New Record!")
                 stop_early = 0
-                checkpoint = "./saved_model/sentiment_{}.ckpt".format(
+                checkpoint = "./saved_model/model_{}/model.ckpt".format(
                     log_string)
                 saver.save(sess, checkpoint)
         test_acc = []
@@ -264,7 +292,8 @@ def train(model, epochs, log_string):
                 feed = {model.inputs: x,
                         model.batch_size: batch_size,
                         model.labels: y[:, None],
-                        model.keep_prob: 1}
+                        model.lstm_output_keep_prob: 1.0,
+                        model.fully_connected_keep_prob: 1.0}
                 summary, batch_loss, batch_acc, test_state = sess.run([model.merged,
                                                                        model.cost,
                                                                        model.accuracy,
@@ -282,23 +311,50 @@ def train(model, epochs, log_string):
         # Print the progress of each epoch
         print("Test Loss: {:.3f}".format(avg_test_loss),
               "Test Acc: {:.3f}".format(avg_test_acc))
+        if avg_test_acc > best_accuracy_on_test:
+            print("Found a new best overall model !! ")
+
+            saveData = {
+                'best_test_accuracy': avg_test_acc,
+                'folder_name': "model_{}".format(log_string),
+                'embed_size': embed_size,
+                'batch_size': batch_size,
+                'lstm_sizes': lstm_sizes,
+                'lstm_output_keep_prob': lstm_output_keep_prob,
+                'fully_connected_keep_prob': fully_connected_keep_prob,
+                'starting_learning_rate': starting_learning_rate,
+                'output_hidden_units': output_hidden_units,
+                'learning_rate_decay_rate_every_epoch': learning_rate_decay_rate_every_epoch,
+                'gradient_cipping_by': gradient_clipping_by,
+                'epochs': epochs,
+                'early_stoping_by': early_stopping_by
+            }
+            save_best_overall_model_data(saveData)
+            copy_tree("./saved_model/model_{}".format(log_string), "./best_model/model_{}".format(log_string))
 
 
 # The default parameters of the model
 embed_size = 300
 batch_size = 100
 lstm_sizes = [64]
-dropout = 0.75
-learning_rate = 0.001
+lstm_output_keep_prob = 0.5
+fully_connected_keep_prob = 0.5
+starting_learning_rate = 0.001
 epochs = 50
-output_hidden_units = [128]
+early_stopping_by = 5
+output_hidden_units = [64]
+learning_rate_decay_rate_every_epoch = 0.8
+gradient_clipping_by = 1.0
 
-log_string = 'lstm_sizes={},output_hidden_units={}'.format(lstm_sizes,
-                                                           output_hidden_units)
+log_string = 'lstm_sizes={},output_hidden_units={},time={}'.format(lstm_sizes,
+                                                                   output_hidden_units,
+                                                                   int(time.time()))
 model = build_rnn(n_words=n_words,
                   embed_size=embed_size,
                   lstm_sizes=lstm_sizes,
-                  starting_learning_rate=learning_rate,
-                  output_hidden_units=output_hidden_units)
+                  starting_learning_rate=starting_learning_rate,
+                  output_hidden_units=output_hidden_units,
+                  learning_rate_decay_rate_every_epoch=learning_rate_decay_rate_every_epoch,
+                  gradient_clipping_by=gradient_clipping_by)
 
 train(model, epochs, log_string)

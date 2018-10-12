@@ -39,6 +39,7 @@ def clean_text(text, remove_stopwords=True):
         stopwords = np.loadtxt("dataset/stopwords.txt", dtype='str')
 
     # reviews = " ".join(reviews)
+    reviews_lengths = []
     for i in range(size):
 
         # Clean the text
@@ -50,6 +51,7 @@ def clean_text(text, remove_stopwords=True):
         if remove_stopwords:
             word_list = reviews[i].split();
             reviews[i] = ' '.join([i for i in word_list if i not in stopwords])
+
             # for word in stopwords:
             #     reviews[i] = reviews[i].replace(" "+word+" ", " ")
 
@@ -85,6 +87,13 @@ print("train_seq is complete.")
 max_review_length = 200
 
 train_pad = pad_sequences(train_seq, maxlen=max_review_length)
+review_lengths_longer_than_pad = 0
+for seq in train_seq:
+    if len(seq) > max_review_length:
+        review_lengths_longer_than_pad = review_lengths_longer_than_pad + 1
+
+print("Number of reviews longer than pad length({}): {}".format(max_review_length, review_lengths_longer_than_pad))
+
 print("train_pad is complete.")
 
 # test_pad = pad_sequences(test_seq, maxlen = max_review_length)
@@ -111,7 +120,7 @@ try:
         'valid_labels': y_valid,
         'num_of_words': len(word_index),
         'tokenizer': tokenizer,
-        'max_review_length':max_review_length
+        'max_review_length': max_review_length
     }
     pickle.dump(save, f, pickle.HIGHEST_PROTOCOL)
     f.close()
