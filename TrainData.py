@@ -25,6 +25,8 @@ n_words = all_data['num_of_words']
 
 del all_data
 
+
+# save best overall model in best_model directory and save its info
 def save_best_overall_model_data(data):
     pathlib.Path('./best_model').mkdir(parents=True, exist_ok=True)
     pickle_file = './best_model/best_model_info.pickle'
@@ -38,17 +40,19 @@ def save_best_overall_model_data(data):
         raise
 
 
+# load best overall model info to check if we find a better one this run
 try:
     best_accuracy_on_test_file = pickle.load(open('./best_model/best_model_info.pickle', 'rb'))
     best_accuracy_on_test = best_accuracy_on_test_file['best_test_accuracy']
     del best_accuracy_on_test_file
 except:
-    save_best_overall_model_data({'best_test_accuracy':0})
-    best_accuracy_on_test=0
+    save_best_overall_model_data({'best_test_accuracy': 0})
+    best_accuracy_on_test = 0
 
+
+# Create the batches for the training, validation data, and testing
 
 def get_batches(x, y, batch_size):
-    '''Create the batches for the training and validation data'''
     n_batches = len(x) // batch_size
     x, y = x[:n_batches * batch_size], y[:n_batches * batch_size]
     for ii in range(0, len(x), batch_size):
@@ -73,14 +77,17 @@ def build_rnn(n_words, embed_size, lstm_sizes, starting_learning_rate, output_hi
     # Create the embeddings
     with tf.name_scope("embeddings"):
         embedding = tf.get_variable("embeddings", shape=(n_words + 1, embed_size),
-                        initializer=initializers.xavier_initializer())
+                                    initializer=initializers.xavier_initializer())
 
         embed = tf.nn.embedding_lookup(embedding, inputs)
 
     # Build the RNN layers
     with tf.name_scope("RNN_layers"):
+        # build dynamic dropout lstm cells
         cells = [
-            tf.nn.rnn_cell.DropoutWrapper(tf.nn.rnn_cell.LSTMCell(num_units=n,initializer=initializers.xavier_initializer()), output_keep_prob=lstm_output_keep_prob)
+            tf.nn.rnn_cell.DropoutWrapper(
+                tf.nn.rnn_cell.LSTMCell(num_units=n, initializer=initializers.xavier_initializer()),
+                output_keep_prob=lstm_output_keep_prob)
             for n
             in lstm_sizes]
 
@@ -110,7 +117,7 @@ def build_rnn(n_words, embed_size, lstm_sizes, starting_learning_rate, output_hi
 
         dense = tf.contrib.layers.dropout(dense, fully_connected_keep_prob)
 
-        # Depending on the iteration, use a second fully connected layer
+        # add hidden layers depending on sent list
         for i in range(1, len(output_hidden_units)):
             dense = tf.contrib.layers.fully_connected(dense,
                                                       num_outputs=output_hidden_units[i],
@@ -118,7 +125,7 @@ def build_rnn(n_words, embed_size, lstm_sizes, starting_learning_rate, output_hi
                                                       weights_initializer=weights_initializer,
                                                       biases_initializer=biases)
 
-            dense = tf.contrib.layers.dropout(dense, fully_connected_keep_prob)
+            dense = tf.contrib.layers.dropout(dense, fully_connected_keep_prob)  # add dropout
 
     # Make the predictions
     with tf.name_scope('predictions'):
@@ -148,7 +155,7 @@ def build_rnn(n_words, embed_size, lstm_sizes, starting_learning_rate, output_hi
         optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
         tvars = tf.trainable_variables()
         grads, _ = tf.clip_by_global_norm(tf.gradients(cost, tvars),
-                                          gradient_clipping_by)  # gradient clipping by 1
+                                          gradient_clipping_by)  # gradient clipping
         optimize = optimizer.apply_gradients(
             zip(grads, tvars),
             global_step=global_step, name='optimize')
@@ -175,9 +182,8 @@ def build_rnn(n_words, embed_size, lstm_sizes, starting_learning_rate, output_hi
     return graph
 
 
+# train the RNN
 def train(model, epochs, log_string):
-    '''Train the RNN'''
-
     saver = tf.train.Saver()
 
     with tf.Session() as sess:
@@ -196,14 +202,13 @@ def train(model, epochs, log_string):
 
         for e in range(epochs):
 
-            # state = sess.run(model.initial_state,feed_dict={model.batch_size: batch_size})
-
             # Record progress with each epoch
             train_loss = []
             train_acc = []
             val_acc = []
             val_loss = []
             learning_rates = []
+            # training set
             with tqdm(total=len(train_data)) as pbar:
                 for _, (x, y) in enumerate(get_batches(train_data, train_labels, batch_size), 1):
                     feed = {model.inputs: x,
@@ -233,7 +238,7 @@ def train(model, epochs, log_string):
             avg_train_loss = np.mean(train_loss)
             avg_train_acc = np.mean(train_acc)
 
-            # val_state = sess.run(model.initial_state,feed_dict={model.batch_size: batch_size})
+            # validation set
             with tqdm(total=len(valid_data)) as pbar:
                 for x, y in get_batches(valid_data, valid_labels, batch_size):
                     feed = {model.inputs: x,
@@ -284,9 +289,10 @@ def train(model, epochs, log_string):
                 checkpoint = "./saved_model/model_{}/model.ckpt".format(
                     log_string)
                 saver.save(sess, checkpoint)
+
+        # test set
         test_acc = []
         test_loss = []
-        # test_state = sess.run(model.initial_state,feed_dict={model.batch_size: batch_size})
         with tqdm(total=len(test_data)) as pbar:
             for x, y in get_batches(test_data, test_labels, batch_size):
                 feed = {model.inputs: x,
@@ -300,17 +306,18 @@ def train(model, epochs, log_string):
                                                                        model.final_state],
                                                                       feed_dict=feed)
 
-                # Record the validation loss and accuracy of each epoch
+                # Record the test loss and accuracy
                 test_loss.append(batch_loss)
                 test_acc.append(batch_acc)
                 pbar.update(batch_size)
 
-                # Average the validation loss and accuracy of each epoch
+        # Average the test loss and test acc
         avg_test_loss = np.mean(test_loss)
         avg_test_acc = np.mean(test_acc)
-        # Print the progress of each epoch
+        # Print test results
         print("Test Loss: {:.3f}".format(avg_test_loss),
               "Test Acc: {:.3f}".format(avg_test_acc))
+        # check if found new overall best model
         if avg_test_acc > best_accuracy_on_test:
             print("Found a new best overall model !! ")
 
@@ -329,11 +336,12 @@ def train(model, epochs, log_string):
                 'epochs': epochs,
                 'early_stoping_by': early_stopping_by
             }
+            # save it
             save_best_overall_model_data(saveData)
             copy_tree("./saved_model/model_{}".format(log_string), "./best_model/model_{}".format(log_string))
 
 
-# The default parameters of the model
+# The parameters of the model
 embed_size = 300
 batch_size = 100
 lstm_sizes = [64]
